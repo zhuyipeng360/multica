@@ -4,9 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"time"
+)
+
+var (
+	ErrBrowserAutomationDenied = errors.New("macOS Automation permission for Google Chrome was denied")
+	ErrBrowserExited           = errors.New("Google Chrome exited while listing tabs")
 )
 
 // ZcodeBrowserProvider supplies read-only Chrome discovery. ListBrowsers must
@@ -245,7 +251,14 @@ func (c *zcodeClient) handleBrowserExecute(id, raw json.RawMessage) {
 		}
 		tabs, err := provider.ListUserTabs(c.browserContext(), params.ZcodeBrowserScope, browser)
 		if err != nil {
-			fail("execution_error", "failed to list user tabs")
+			message := "failed to list user tabs"
+			switch {
+			case errors.Is(err, ErrBrowserAutomationDenied):
+				message = ErrBrowserAutomationDenied.Error()
+			case errors.Is(err, ErrBrowserExited):
+				message = ErrBrowserExited.Error()
+			}
+			fail("execution_error", message)
 			return
 		}
 		for _, tab := range tabs {

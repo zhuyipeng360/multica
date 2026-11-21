@@ -27,6 +27,15 @@ var ErrChromeIdentityUnverified = errors.New("default Chrome process identity co
 // ErrChromeCDPUnavailable means the verified Chrome has no usable local DevTools endpoint.
 var ErrChromeCDPUnavailable = errors.New("default Chrome DevTools is unavailable")
 
+// ErrChromeAutomationDenied means macOS denied Automation access to Chrome.
+var ErrChromeAutomationDenied = errors.New("macOS Automation permission for Google Chrome was denied")
+
+// ErrChromeExited means Chrome exited while its tabs were being read.
+var ErrChromeExited = errors.New("default Chrome exited while listing tabs")
+
+// ErrChromeJXAUnavailable means JXA could not read the verified Chrome instance.
+var ErrChromeJXAUnavailable = errors.New("unable to list default Chrome tabs using macOS Automation")
+
 // ChromeTab is the deliberately limited, read-only representation of a page target.
 // Title and URL may contain private information and should not be logged.
 type ChromeTab struct {
@@ -59,6 +68,7 @@ type chromeDependencies struct {
 	identity func(context.Context, chromeProcess) bool
 	listener func(context.Context, int, int) bool
 	active   func(string) (string, error)
+	jxa      func(context.Context, int) ([]ChromeTab, error)
 	client   *http.Client
 }
 
@@ -67,15 +77,14 @@ func NewChromeDiscovery() *ChromeDiscovery {
 	return &ChromeDiscovery{deps: chromeDependencies{
 		home: os.UserHomeDir, hostname: os.Hostname, uid: os.Getuid,
 		readlink: os.Readlink, process: chromeProcessInfo, identity: verifyChromeSignature, listener: chromeOwnsListener,
-		active: readChromeActivePort, client: localChromeHTTPClient(),
+		active: readChromeActivePort, jxa: listChromeTabsJXA, client: localChromeHTTPClient(),
 	}}
 }
 
-// ListTabs returns only page targets from the default profile's existing CDP
-// listener. It does not open targets or inspect page contents. Unsupported OSes
-// return ErrUnsupported; a missing profile lock returns ErrChromeNotRunning,
-// an unverified owner returns ErrChromeIdentityUnverified, and an unavailable
-// endpoint returns ErrChromeCDPUnavailable.
+// ListTabs returns tabs from the default Chrome profile using an existing CDP
+// listener when available, or macOS Automation otherwise. It never opens targets
+// or inspects page contents. Errors distinguish missing Chrome, unverified
+// identity, unavailable CDP, and Automation failures.
 func (d *ChromeDiscovery) ListTabs(ctx context.Context) ([]ChromeTab, error) {
 	_, tabs, err := d.List(ctx)
 	return tabs, err
@@ -114,6 +123,7 @@ func (d *ChromeDiscovery) listTabs(ctx context.Context) ([]ChromeTab, error) {
 
 type chromeSession struct {
 	id       string
+	pid      int
 	port     int
 	verified func() bool
 }
@@ -148,42 +158,73 @@ func (d *ChromeDiscovery) findChrome(ctx context.Context) (chromeSession, error)
 	if err != nil || !isDefaultChrome(proc, pid, deps.uid()) || !deps.identity(ctx, proc) {
 		return chromeSession{}, chromeContextError(ctx, ErrChromeIdentityUnverified)
 	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("chrome:%d:%d", proc.pid, proc.start)))
+	verifiedProcess := func() bool {
+		currentLink, err := d.deps.readlink(lock)
+		if err != nil || currentLink != link {
+			return false
+		}
+		current, err := d.deps.process(ctx, pid)
+		return err == nil && sameChromeProcess(proc, current) && isDefaultChrome(current, pid, d.deps.uid())
+	}
+	fallback := chromeSession{id: "chrome:" + hex.EncodeToString(sum[:16]), pid: pid, verified: verifiedProcess}
+	if !verifiedProcess() {
+		return chromeSession{}, chromeContextError(ctx, ErrChromeIdentityUnverified)
+	}
 	port, ephemeral, ok := chromeDebugPort(proc.args)
 	if !ok {
-		return chromeSession{}, ErrChromeCDPUnavailable
+		return fallback, nil
 	}
 	if ephemeral {
 		contents, err := deps.active(filepath.Join(dir, "DevToolsActivePort"))
 		if err != nil {
-			return chromeSession{}, ErrChromeCDPUnavailable
+			return fallback, nil
 		}
 		port, err = strconv.Atoi(strings.TrimSpace(strings.SplitN(contents, "\n", 2)[0]))
 		if err != nil || port < 1 || port > 65535 {
-			return chromeSession{}, ErrChromeCDPUnavailable
+			return fallback, nil
 		}
 	}
 	// Revalidate before each request and after the response. Neither a stale
 	// SingletonLock nor a port recycled by a different process authorizes a probe.
 	verified := func() bool {
-		currentLink, err := deps.readlink(lock)
-		if err != nil || currentLink != link {
-			return false
-		}
-		current, err := deps.process(ctx, pid)
-		return err == nil && sameChromeProcess(proc, current) &&
-			isDefaultChrome(current, pid, deps.uid()) && deps.listener(ctx, pid, port)
+		return verifiedProcess() && deps.listener(ctx, pid, port)
 	}
 	if !verified() || !probeCDPWithClient(ctx, port, deps.client) || !verified() {
-		return chromeSession{}, chromeContextError(ctx, ErrChromeCDPUnavailable)
+		if err := ctx.Err(); err != nil {
+			return chromeSession{}, err
+		}
+		if !verifiedProcess() {
+			return chromeSession{}, ErrChromeIdentityUnverified
+		}
+		return fallback, nil
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("chrome:%d:%d", proc.pid, proc.start)))
-	return chromeSession{id: "chrome:" + hex.EncodeToString(sum[:16]), port: port, verified: verified}, nil
+	return chromeSession{id: fallback.id, pid: pid, port: port, verified: verified}, nil
 }
 
 func (d *ChromeDiscovery) list(ctx context.Context) (string, []ChromeTab, error) {
 	session, err := d.findChrome(ctx)
 	if err != nil {
 		return "", nil, err
+	}
+	if session.port == 0 {
+		if !session.verified() {
+			return "", nil, chromeContextError(ctx, ErrChromeIdentityUnverified)
+		}
+		if d.deps.jxa == nil {
+			return "", nil, ErrChromeCDPUnavailable
+		}
+		tabs, err := d.deps.jxa(ctx, session.pid)
+		if err != nil {
+			return "", nil, err
+		}
+		if !session.verified() {
+			return "", nil, chromeContextError(ctx, ErrChromeIdentityUnverified)
+		}
+		for i := range tabs {
+			tabs[i].URL = safeChromeURL(tabs[i].URL)
+		}
+		return session.id, tabs, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()

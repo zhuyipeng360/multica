@@ -31,7 +31,14 @@ func (p zcodeChromeProvider) ListBrowsers(ctx context.Context, _ agent.ZcodeBrow
 func (p zcodeChromeProvider) ListUserTabs(ctx context.Context, _ agent.ZcodeBrowserScope, browser agent.ZcodeBrowser) ([]agent.ZcodeUserTab, error) {
 	id, tabs, err := p.discovery.List(ctx)
 	if err != nil {
-		return nil, err
+		switch {
+		case errors.Is(err, localenv.ErrChromeAutomationDenied):
+			return nil, agent.ErrBrowserAutomationDenied
+		case errors.Is(err, localenv.ErrChromeExited):
+			return nil, agent.ErrBrowserExited
+		default:
+			return nil, err
+		}
 	}
 	if id != browser.ID || browser.Generation != 0 {
 		return nil, errors.New("Chrome instance changed")

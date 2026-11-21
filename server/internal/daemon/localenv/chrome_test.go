@@ -204,7 +204,7 @@ func TestChromeDoesNotProbeUnownedOrChangedPort(t *testing.T) {
 		d := fakeChromeDiscovery(port)
 		d.deps.listener = func(context.Context, int, int) bool { return false }
 		_, err := d.listTabs(context.Background())
-		if !errors.Is(err, ErrChromeCDPUnavailable) || requests.Load() != 0 {
+		if !(errors.Is(err, ErrChromeCDPUnavailable) || errors.Is(err, ErrChromeIdentityUnverified)) || requests.Load() != 0 {
 			t.Fatalf("err=%v requests=%d", err, requests.Load())
 		}
 	})
@@ -221,7 +221,7 @@ func TestChromeDoesNotProbeUnownedOrChangedPort(t *testing.T) {
 			return p, err
 		}
 		_, err := d.listTabs(context.Background())
-		if !errors.Is(err, ErrChromeCDPUnavailable) || requests.Load() != 0 {
+		if !(errors.Is(err, ErrChromeCDPUnavailable) || errors.Is(err, ErrChromeIdentityUnverified)) || requests.Load() != 0 {
 			t.Fatalf("err=%v requests=%d", err, requests.Load())
 		}
 	})
@@ -236,7 +236,7 @@ func TestChromeDoesNotProbeUnownedOrChangedPort(t *testing.T) {
 			return "test-host-123", nil
 		}
 		_, err := d.listTabs(context.Background())
-		if !errors.Is(err, ErrChromeCDPUnavailable) || requests.Load() != 0 {
+		if !(errors.Is(err, ErrChromeCDPUnavailable) || errors.Is(err, ErrChromeIdentityUnverified)) || requests.Load() != 0 {
 			t.Fatalf("err=%v requests=%d", err, requests.Load())
 		}
 	})

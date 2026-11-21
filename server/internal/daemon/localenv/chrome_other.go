@@ -13,3 +13,5 @@ func chromeProcessInfo(context.Context, int) (chromeProcess, error) {
 func verifyChromeSignature(context.Context, chromeProcess) bool { return false }
 
 func chromeOwnsListener(context.Context, int, int) bool { return false }
+
+func listChromeTabsJXA(context.Context, int) ([]ChromeTab, error) { return nil, ErrUnsupported }
