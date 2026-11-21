@@ -1,5 +1,9 @@
 # Read-only default Chrome discovery for ZCode
 
+## Port base
+
+This branch, `feat/browser-list-jxa-0.11.1`, is based on official `v0.11.1` commit `e1fe10d6694848e35dd1aa00e08cd11d93e545ac`. The two browser commits were cherry-picked without conflicts; the last code commit is `c5db45386` (resolve the branch HEAD with `git rev-parse HEAD`, since a commit cannot embed its own hash). The older `feat/browser-list-jxa` branch at `6493eb15f` is not the deployment candidate. A future build should use version `0.11.1-fork-jxa` and its actual HEAD commit; the rollback baseline is the installed official 0.11.1.
+
 ## Scope and protocol
 
 The daemon provides read-only discovery of the default Chrome profile to ZCode, without changing the permission approval flow, Bash policy, Chrome settings, or the running Multica installation. The [ZCode protocol schema](https://github.com/zai-org/ZCode/blob/fec975905a2abd4c07e35c40d51fa097a2258ec9/packages/shared/src/zcode-protocol/index.ts) defines `interaction/browserList` as returning browser descriptors, not tabs. `browser.user.openTabs()` then issues `interaction/browserExecute` with `listUserTabs`. Other browser commands are rejected; the existing permission rejection and unknown-method `-32601` handling remain unchanged.
@@ -29,9 +33,8 @@ If macOS prompts, the user must decide whether to allow it; the daemon must not 
 ## Verification on this Mac
 
 - Adapter test with `chromeintegration` and `MULTICA_RUN_REAL_CHROME_READONLY=1`: **passed**, 31 tabs; Duoduo title/host match and food-directory title/path match were both true. This is a real adapter test, **not** a Multica app/Agent end-to-end test.
-- Go 1.26.9 focused `-race` tests for `localenv`, `agent`, and `daemon`: passed, using fakes for normal tests. The full `localenv` package test passed.
-- The previously failing `TestCodexCancellationDuringInitializeStopsProcessImmediately` passed on a standalone `-race` rerun. The earlier full agent suite failure remains a historical result, not evidence that the full suite now passes.
-- `make test` was attempted and stopped before tests: Docker engine unavailable. No existing Multica database or configuration was used.
+- On the ported branch, Go 1.26.9 focused `-race` tests for `localenv`, `agent`, and `daemon` passed using fake Chrome/CDP in the normal tests.
+- Full `make test` was not run on the ported branch. On the earlier branch it stopped before tests because Docker was unavailable; the historical full agent suite also failed a Codex cancellation test, which later passed when rerun alone. Neither result establishes a full-suite pass on this branch.
 - Full Multica app/Agent end-to-end, deployed daemon Automation identity, and actual denied-permission dialog were not tested. Denied and exited results were covered with unit tests.
 
 Reproduce isolated checks from `server/` with Go 1.26.9:
