@@ -49,4 +49,13 @@ func TestZcodeChromeProvider(t *testing.T) {
 	if _, err := p.ListBrowsers(ctx, scope); !errors.Is(err, localenv.ErrChromeCDPUnavailable) {
 		t.Fatalf("unavailable CDP: %v", err)
 	}
+	for _, tc := range []struct{ local, protocol error }{
+		{localenv.ErrChromeAutomationDenied, agent.ErrBrowserAutomationDenied},
+		{localenv.ErrChromeExited, agent.ErrBrowserExited},
+	} {
+		p.discovery = fakeChromeDiscovery{listErr: tc.local}
+		if _, err := p.ListUserTabs(ctx, scope, browsers[0]); !errors.Is(err, tc.protocol) {
+			t.Fatalf("error mapping: %v", err)
+		}
+	}
 }
