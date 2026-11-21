@@ -261,6 +261,7 @@ func (b *zcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 
 	c := &zcodeClient{
 		cfg:         b.cfg,
+		ctx:         runCtx,
 		stdin:       stdin,
 		pending:     make(map[int]*pendingRPC),
 		processDone: make(chan struct{}),
@@ -899,6 +900,7 @@ func (f *zcodeRoleFilter) deliver(p zcodeUpsertedPayload) bool {
 // stdio. Wire frames carry no `jsonrpc` member (see zcodeBackend's doc).
 type zcodeClient struct {
 	cfg Config
+	ctx context.Context
 
 	stdin io.Writer
 
@@ -1164,8 +1166,8 @@ func (c *zcodeClient) closeAllPending(err error) {
 //     requestPermission is answered {"decision":"deny"} fail-closed (the
 //     headless client cannot approve); session/requestRuntimePreferences is
 //     answered with zcodeRuntimePreferencesDefaults (an unanswered request
-//     fails session/create with -32022 after its 15s timeout); every other
-//     method gets -32601.
+//     fails session/create with -32022 after its 15s timeout); browser requests
+//     are handled by the read-only provider; every other method gets -32601.
 //   - {id, result|error}: a response to one of our requests.
 //   - {method, params}: a notification; only session/event is consumed.
 func (c *zcodeClient) handleLine(line string) {
@@ -1178,7 +1180,7 @@ func (c *zcodeClient) handleLine(line string) {
 	}
 	if err := json.Unmarshal([]byte(line), &msg); err != nil {
 		if c.cfg.Logger != nil {
-			c.cfg.Logger.Debug("zcode unparseable frame", "line", truncateZcodeLogLine(line))
+			c.cfg.Logger.Debug("zcode unparseable frame")
 		}
 		return
 	}
@@ -1191,6 +1193,10 @@ func (c *zcodeClient) handleLine(line string) {
 			c.respond(msg.ID, map[string]any{"decision": "deny"})
 		case "session/requestRuntimePreferences":
 			c.respond(msg.ID, zcodeRuntimePreferencesDefaults())
+		case "interaction/browserList":
+			c.handleBrowserList(msg.ID, msg.Params)
+		case "interaction/browserExecute":
+			c.handleBrowserExecute(msg.ID, msg.Params)
 		default:
 			c.respondError(msg.ID, -32601, fmt.Sprintf("method not supported by multica: %s", msg.Method))
 		}
@@ -1245,13 +1251,6 @@ func trySendRPC(pr *pendingRPC, result json.RawMessage, rpcErr *zcodeRPCError) {
 	case pr.ch <- rpcResult{result: result, err: err}:
 	default:
 	}
-}
-
-func truncateZcodeLogLine(line string) string {
-	if len(line) <= 512 {
-		return line
-	}
-	return line[:512]
 }
 
 // zcodeSessionIDFromSnapshot extracts result.session.sessionId from a

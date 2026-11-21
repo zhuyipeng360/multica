@@ -9243,6 +9243,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		CodexVersion:   codexVersion,
 		BuiltinRuntime: !usesCustomProfileCommand,
 	}
+	if provider == "zcode" {
+		backendConfig.ZcodeBrowserProvider = zcodeChromeProvider{discovery: localenv.NewChromeDiscovery()}
+	}
 	if hermesOverlayActive {
 		// Retire an owner left by a crashed/interrupted daemon before it can
 		// execute tools with the preceding task's frozen environment.

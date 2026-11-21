@@ -536,7 +536,7 @@ func TestZcodePermissionAndUnknownReverseRequests(t *testing.T) {
 func TestZcodeUnknownNotificationDoesNotBreakFlow(t *testing.T) {
 	t.Parallel()
 	postSend := `      printf '{"method":"mcpResourceSamples","params":{}}\n'
-      printf '{"id":"srv-9","method":"interaction/browserList","params":{}}\n'
+      printf '{"id":"srv-9","method":"interaction/unknownReverseRequest","params":{}}\n'
 ` + zcodeEventFrame(6, "turn.completed", `{"response":"ok","resultType":"success","tokenCount":0,"toolCallCount":0,"duration":1}`)
 	bin := writeFakeZcodeScript(t, fakeZcodeHappyScript(postSend))
 
