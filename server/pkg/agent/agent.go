@@ -374,6 +374,8 @@ type Config struct {
 	RuntimeID      string
 	DaemonVersion  string
 	CodexVersion   string
+	// ZcodeBrowserProvider is optional; without one ZCode sees no browsers.
+	ZcodeBrowserProvider ZcodeBrowserProvider
 	// BuiltinRuntime reports that ExecutablePath is the provider's own
 	// discovered binary rather than a custom runtime profile's command. A
 	// custom profile keeps its protocol family as the provider, so the

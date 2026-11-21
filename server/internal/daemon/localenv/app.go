@@ -55,13 +55,17 @@ func (p Process) debugs(port int) bool {
 // probeCDP reports whether port answers as a DevTools endpoint, for an app
 // that turned debugging on from its own code rather than its arguments.
 func probeCDP(ctx context.Context, port int) bool {
+	return probeCDPWithClient(ctx, port, http.DefaultClient)
+}
+
+func probeCDPWithClient(ctx context.Context, port int, client *http.Client) bool {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/json/version", port), nil)
 	if err != nil {
 		return false
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
