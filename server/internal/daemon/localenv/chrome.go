@@ -47,7 +47,8 @@ type ChromeTab struct {
 // ChromeDiscovery discovers only the process owning the default Chrome profile.
 // It never launches Chrome or turns on debugging. It is safe for concurrent use.
 type ChromeDiscovery struct {
-	deps chromeDependencies
+	deps    chromeDependencies
+	jxaRefs chromeJXARefState
 }
 
 type chromeProcess struct {
@@ -69,6 +70,7 @@ type chromeDependencies struct {
 	listener func(context.Context, int, int) bool
 	active   func(string) (string, error)
 	jxa      func(context.Context, int) ([]ChromeTab, error)
+	jxaRead  func(context.Context, int, string, string) ([]byte, error)
 	client   *http.Client
 }
 
@@ -77,7 +79,7 @@ func NewChromeDiscovery() *ChromeDiscovery {
 	return &ChromeDiscovery{deps: chromeDependencies{
 		home: os.UserHomeDir, hostname: os.Hostname, uid: os.Getuid,
 		readlink: os.Readlink, process: chromeProcessInfo, identity: verifyChromeSignature, listener: chromeOwnsListener,
-		active: readChromeActivePort, jxa: listChromeTabsJXA, client: localChromeHTTPClient(),
+		active: readChromeActivePort, jxa: listChromeTabsJXA, jxaRead: runChromeReadJXA, client: localChromeHTTPClient(),
 	}}
 }
 
@@ -128,35 +130,35 @@ type chromeSession struct {
 	verified func() bool
 }
 
-func (d *ChromeDiscovery) findChrome(ctx context.Context) (chromeSession, error) {
+func (d *ChromeDiscovery) findChromeProcess(ctx context.Context) (chromeSession, chromeProcess, error) {
 	if err := ctx.Err(); err != nil {
-		return chromeSession{}, err
+		return chromeSession{}, chromeProcess{}, err
 	}
 	deps := d.deps
 	home, err := deps.home()
 	if err != nil || home == "" {
-		return chromeSession{}, ErrChromeIdentityUnverified
+		return chromeSession{}, chromeProcess{}, ErrChromeIdentityUnverified
 	}
 	dir := filepath.Join(home, "Library", "Application Support", "Google", "Chrome")
 	lock := filepath.Join(dir, "SingletonLock")
 	host, err := deps.hostname()
 	if err != nil || host == "" {
-		return chromeSession{}, ErrChromeIdentityUnverified
+		return chromeSession{}, chromeProcess{}, ErrChromeIdentityUnverified
 	}
 	link, err := deps.readlink(lock)
 	if errors.Is(err, os.ErrNotExist) {
-		return chromeSession{}, ErrChromeNotRunning
+		return chromeSession{}, chromeProcess{}, ErrChromeNotRunning
 	}
 	if err != nil {
-		return chromeSession{}, ErrChromeIdentityUnverified
+		return chromeSession{}, chromeProcess{}, ErrChromeIdentityUnverified
 	}
 	pid, ok := chromeLockPID(link, host)
 	if !ok {
-		return chromeSession{}, ErrChromeIdentityUnverified
+		return chromeSession{}, chromeProcess{}, ErrChromeIdentityUnverified
 	}
 	proc, err := deps.process(ctx, pid)
 	if err != nil || !isDefaultChrome(proc, pid, deps.uid()) || !deps.identity(ctx, proc) {
-		return chromeSession{}, chromeContextError(ctx, ErrChromeIdentityUnverified)
+		return chromeSession{}, chromeProcess{}, chromeContextError(ctx, ErrChromeIdentityUnverified)
 	}
 	sum := sha256.Sum256([]byte(fmt.Sprintf("chrome:%d:%d", proc.pid, proc.start)))
 	verifiedProcess := func() bool {
@@ -169,8 +171,24 @@ func (d *ChromeDiscovery) findChrome(ctx context.Context) (chromeSession, error)
 	}
 	fallback := chromeSession{id: "chrome:" + hex.EncodeToString(sum[:16]), pid: pid, verified: verifiedProcess}
 	if !verifiedProcess() {
-		return chromeSession{}, chromeContextError(ctx, ErrChromeIdentityUnverified)
+		return chromeSession{}, chromeProcess{}, chromeContextError(ctx, ErrChromeIdentityUnverified)
 	}
+	return fallback, proc, nil
+}
+
+func (d *ChromeDiscovery) findChrome(ctx context.Context) (chromeSession, error) {
+	fallback, proc, err := d.findChromeProcess(ctx)
+	if err != nil {
+		return chromeSession{}, err
+	}
+	deps := d.deps
+	pid := fallback.pid
+	verifiedProcess := fallback.verified
+	home, err := deps.home()
+	if err != nil || home == "" {
+		return chromeSession{}, ErrChromeIdentityUnverified
+	}
+	dir := filepath.Join(home, "Library", "Application Support", "Google", "Chrome")
 	port, ephemeral, ok := chromeDebugPort(proc.args)
 	if !ok {
 		return fallback, nil

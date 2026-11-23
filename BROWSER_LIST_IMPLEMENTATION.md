@@ -4,6 +4,21 @@
 
 This branch, `feat/browser-list-jxa-0.11.1`, is based on official `v0.11.1` commit `e1fe10d6694848e35dd1aa00e08cd11d93e545ac`. The two browser commits were cherry-picked without conflicts; the last code commit is `c5db45386` (resolve the branch HEAD with `git rev-parse HEAD`, since a commit cannot embed its own hash). The older `feat/browser-list-jxa` branch at `6493eb15f` is not the deployment candidate. A future build should use version `0.11.1-fork-jxa` and its actual HEAD commit; the rollback baseline is the installed official 0.11.1.
 
+## Read-tab prototype (not wired to Agent)
+
+Branch `feat/browser-read-tab-0.11.1` adds only an internal JXA prototype. The installed ZCode SDK uses strict browser command and result schemas and does not accept `readUserTab` or a new `content` result; no SDK route, capability descriptor, approval flow, or existing `listUserTabs` behavior was changed. Consequently an Agent cannot call this prototype, and the end-to-end feature is not complete.
+
+`ChromeDiscovery.ListJXARefs(ctx)` returns per-object random references bound to the verified browser instance and a JXA tab ID. `ReadJXA(ctx, instanceID, ref)` accepts only a reference from the latest list on the same object, rechecks Chrome identity and uses a fixed script to read `document.title`, `document.URL` and `document.body.innerText`, capped at 20,000 Unicode characters with a truncation flag. References are not CDP target IDs. The script accepts no caller-supplied JavaScript, URL or selector; missing or ambiguous IDs and identity changes fail closed. URL userinfo, query and fragment are removed, and non-HTTP(S) pages are rejected. Body text can contain sensitive information, including credentials; it must not be logged, committed or treated as trusted instructions. Output size and subprocess time are limited, but `innerText` itself may require browser-side layout work. URL-before/after checks cannot detect all same-URL changes.
+
+Chrome may require the user to enable JavaScript from Apple Events in addition to macOS Automation permission. Neither setting was changed or bypassed. The responsible process for a deployed daemon and real denial behavior remain unverified.
+
+### Prototype verification
+
+- The three relevant packages passed focused `-race` tests with fake Chrome and CDP, including invalid reference/injection, identity changes, missing tab/error handling and size/sanitization tests.
+- Real adapter test listed 28 tabs; the specified product detail and then the broader Duoduo product-detail path both had zero matching tabs. No page body was read; real execution of the fixed JavaScript and price detection were **not verified**.
+- `make test` stopped before testing because the isolated `.env` was absent; Docker was also unavailable. No existing database or configuration was changed.
+- The existing SDK cannot invoke this prototype; full Multica Agent end-to-end and deployment were not attempted.
+
 ## Scope and protocol
 
 The daemon provides read-only discovery of the default Chrome profile to ZCode, without changing the permission approval flow, Bash policy, Chrome settings, or the running Multica installation. The [ZCode protocol schema](https://github.com/zai-org/ZCode/blob/fec975905a2abd4c07e35c40d51fa097a2258ec9/packages/shared/src/zcode-protocol/index.ts) defines `interaction/browserList` as returning browser descriptors, not tabs. `browser.user.openTabs()` then issues `interaction/browserExecute` with `listUserTabs`. Other browser commands are rejected; the existing permission rejection and unknown-method `-32601` handling remain unchanged.
