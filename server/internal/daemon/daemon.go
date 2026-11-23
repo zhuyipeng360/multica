@@ -9224,7 +9224,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		BuiltinRuntime: !usesCustomProfileCommand,
 	}
 	if provider == "zcode" {
-		backendConfig.ZcodeBrowserProvider = zcodeChromeProvider{discovery: localenv.NewChromeDiscovery()}
+		backendConfig.ZcodeBrowserProvider = &zcodeChromeProvider{discovery: localenv.NewChromeDiscovery(), claims: &chromeClaims{listed: make(map[chromeScopeKey]map[string]bool), claimed: make(map[chromeScopeKey]map[string]string)}}
 	}
 	if hermesOverlayActive {
 		// Retire an owner left by a crashed/interrupted daemon before it can

@@ -25,7 +25,7 @@ func (f fakeChromeDiscovery) List(context.Context) (string, []localenv.ChromeTab
 func TestZcodeChromeProvider(t *testing.T) {
 	ctx := context.Background()
 	scope := agent.ZcodeBrowserScope{}
-	p := zcodeChromeProvider{discovery: fakeChromeDiscovery{
+	p := &zcodeChromeProvider{discovery: fakeChromeDiscovery{
 		id: "chrome-one", listID: "chrome-one",
 		tabs: []localenv.ChromeTab{{ID: "tab-one", Title: "Example", URL: "https://example.test/path"}},
 	}}

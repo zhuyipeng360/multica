@@ -69,6 +69,7 @@ type chromeDependencies struct {
 	listener func(context.Context, int, int) bool
 	active   func(string) (string, error)
 	jxa      func(context.Context, int) ([]ChromeTab, error)
+	jxaPage  func(context.Context, int, string, string) ([]byte, error)
 	client   *http.Client
 }
 
@@ -77,7 +78,7 @@ func NewChromeDiscovery() *ChromeDiscovery {
 	return &ChromeDiscovery{deps: chromeDependencies{
 		home: os.UserHomeDir, hostname: os.Hostname, uid: os.Getuid,
 		readlink: os.Readlink, process: chromeProcessInfo, identity: verifyChromeSignature, listener: chromeOwnsListener,
-		active: readChromeActivePort, jxa: listChromeTabsJXA, client: localChromeHTTPClient(),
+		active: readChromeActivePort, jxa: listChromeTabsJXA, jxaPage: runChromePageJXA, client: localChromeHTTPClient(),
 	}}
 }
 
@@ -116,6 +117,24 @@ func (d *ChromeDiscovery) List(ctx context.Context) (string, []ChromeTab, error)
 	return d.list(ctx)
 }
 
+// ChromeListSource identifies the namespace of IDs returned by a list call.
+// CDP target IDs must never be interpreted as JXA tab IDs.
+type ChromeListSource string
+
+const (
+	ChromeListSourceJXA ChromeListSource = "jxa"
+	ChromeListSourceCDP ChromeListSource = "cdp"
+)
+
+// ListWithSource preserves List's results and identifies the source of that
+// exact response. Callers must bind the source and IDs to their own scope.
+func (d *ChromeDiscovery) ListWithSource(ctx context.Context) (string, []ChromeTab, ChromeListSource, error) {
+	if !chromeSupported {
+		return "", nil, "", ErrUnsupported
+	}
+	return d.listWithSource(ctx)
+}
+
 func (d *ChromeDiscovery) listTabs(ctx context.Context) ([]ChromeTab, error) {
 	_, tabs, err := d.list(ctx)
 	return tabs, err
@@ -125,38 +144,39 @@ type chromeSession struct {
 	id       string
 	pid      int
 	port     int
+	process  chromeProcess
 	verified func() bool
 }
 
-func (d *ChromeDiscovery) findChrome(ctx context.Context) (chromeSession, error) {
+func (d *ChromeDiscovery) findChromeProcess(ctx context.Context) (chromeSession, chromeProcess, string, error) {
 	if err := ctx.Err(); err != nil {
-		return chromeSession{}, err
+		return chromeSession{}, chromeProcess{}, "", err
 	}
 	deps := d.deps
 	home, err := deps.home()
 	if err != nil || home == "" {
-		return chromeSession{}, ErrChromeIdentityUnverified
+		return chromeSession{}, chromeProcess{}, "", ErrChromeIdentityUnverified
 	}
 	dir := filepath.Join(home, "Library", "Application Support", "Google", "Chrome")
 	lock := filepath.Join(dir, "SingletonLock")
 	host, err := deps.hostname()
 	if err != nil || host == "" {
-		return chromeSession{}, ErrChromeIdentityUnverified
+		return chromeSession{}, chromeProcess{}, "", ErrChromeIdentityUnverified
 	}
 	link, err := deps.readlink(lock)
 	if errors.Is(err, os.ErrNotExist) {
-		return chromeSession{}, ErrChromeNotRunning
+		return chromeSession{}, chromeProcess{}, "", ErrChromeNotRunning
 	}
 	if err != nil {
-		return chromeSession{}, ErrChromeIdentityUnverified
+		return chromeSession{}, chromeProcess{}, "", ErrChromeIdentityUnverified
 	}
 	pid, ok := chromeLockPID(link, host)
 	if !ok {
-		return chromeSession{}, ErrChromeIdentityUnverified
+		return chromeSession{}, chromeProcess{}, "", ErrChromeIdentityUnverified
 	}
 	proc, err := deps.process(ctx, pid)
 	if err != nil || !isDefaultChrome(proc, pid, deps.uid()) || !deps.identity(ctx, proc) {
-		return chromeSession{}, chromeContextError(ctx, ErrChromeIdentityUnverified)
+		return chromeSession{}, chromeProcess{}, "", chromeContextError(ctx, ErrChromeIdentityUnverified)
 	}
 	sum := sha256.Sum256([]byte(fmt.Sprintf("chrome:%d:%d", proc.pid, proc.start)))
 	verifiedProcess := func() bool {
@@ -167,10 +187,19 @@ func (d *ChromeDiscovery) findChrome(ctx context.Context) (chromeSession, error)
 		current, err := d.deps.process(ctx, pid)
 		return err == nil && sameChromeProcess(proc, current) && isDefaultChrome(current, pid, d.deps.uid())
 	}
-	fallback := chromeSession{id: "chrome:" + hex.EncodeToString(sum[:16]), pid: pid, verified: verifiedProcess}
+	fallback := chromeSession{id: "chrome:" + hex.EncodeToString(sum[:16]), pid: pid, process: proc, verified: verifiedProcess}
 	if !verifiedProcess() {
-		return chromeSession{}, chromeContextError(ctx, ErrChromeIdentityUnverified)
+		return chromeSession{}, chromeProcess{}, "", chromeContextError(ctx, ErrChromeIdentityUnverified)
 	}
+	return fallback, proc, dir, nil
+}
+
+func (d *ChromeDiscovery) findChrome(ctx context.Context) (chromeSession, error) {
+	fallback, proc, dir, err := d.findChromeProcess(ctx)
+	if err != nil {
+		return chromeSession{}, err
+	}
+	deps, pid, verifiedProcess := d.deps, fallback.pid, fallback.verified
 	port, ephemeral, ok := chromeDebugPort(proc.args)
 	if !ok {
 		return fallback, nil
@@ -199,27 +228,44 @@ func (d *ChromeDiscovery) findChrome(ctx context.Context) (chromeSession, error)
 		}
 		return fallback, nil
 	}
-	return chromeSession{id: fallback.id, pid: pid, port: port, verified: verified}, nil
+	return chromeSession{id: fallback.id, pid: pid, port: port, process: proc, verified: verified}, nil
 }
 
 func (d *ChromeDiscovery) list(ctx context.Context) (string, []ChromeTab, error) {
+	id, tabs, _, err := d.listWithSource(ctx)
+	return id, tabs, err
+}
+
+func (d *ChromeDiscovery) listWithSource(ctx context.Context) (string, []ChromeTab, ChromeListSource, error) {
 	session, err := d.findChrome(ctx)
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
+	source := ChromeListSourceCDP
 	if session.port == 0 {
-		if !session.verified() {
+		source = ChromeListSourceJXA
+	}
+	id, tabs, err := d.listSession(ctx, session)
+	if err != nil {
+		return "", nil, "", err
+	}
+	return id, tabs, source, nil
+}
+
+func (d *ChromeDiscovery) listSession(ctx context.Context, session chromeSession) (string, []ChromeTab, error) {
+	if session.port == 0 {
+		if !session.verified() || !d.deps.identity(ctx, session.process) || !session.verified() {
 			return "", nil, chromeContextError(ctx, ErrChromeIdentityUnverified)
 		}
 		if d.deps.jxa == nil {
 			return "", nil, ErrChromeCDPUnavailable
 		}
 		tabs, err := d.deps.jxa(ctx, session.pid)
+		if !session.verified() || !d.deps.identity(ctx, session.process) || !session.verified() {
+			return "", nil, chromeContextError(ctx, ErrChromeIdentityUnverified)
+		}
 		if err != nil {
 			return "", nil, err
-		}
-		if !session.verified() {
-			return "", nil, chromeContextError(ctx, ErrChromeIdentityUnverified)
 		}
 		for i := range tabs {
 			tabs[i].URL = safeChromeURL(tabs[i].URL)

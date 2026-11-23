@@ -203,7 +203,7 @@ func TestZcodeBrowserEmptyAndErrors(t *testing.T) {
 func TestZcodeBrowserExecuteRejectsEveryOtherCommand(t *testing.T) {
 	// All methods in the installed ZCode command discriminated union, plus an
 	// unknown future command. Rejection must happen before any provider access.
-	methods := strings.Fields("navigate back forward reload snapshot click fill type press cuaKeypress scroll cuaScroll domCuaScroll hover select check drag cuaDrag screenshot getState elementInfo evaluate getDialog handleDialog waitFor playwright playwrightWaitForTimeout capabilities browserVisibilityGet browserVisibilitySet browserViewportSet browserViewportReset recordingStart recordingStatus recordingCancel activateTab newTab finalize finalizeTabs claimTab markDeliverable markHandoff nameSession openScope releaseScope turnEnded closeSession cancelRequest close list futureMethod")
+	methods := strings.Fields("navigate back forward reload click fill type press cuaKeypress scroll cuaScroll domCuaScroll hover select check drag cuaDrag screenshot getState elementInfo evaluate getDialog handleDialog waitFor playwright playwrightWaitForTimeout capabilities browserVisibilityGet browserVisibilitySet browserViewportSet browserViewportReset recordingStart recordingStatus recordingCancel activateTab newTab finalize finalizeTabs markDeliverable markHandoff nameSession openScope releaseScope turnEnded closeSession cancelRequest close list futureMethod")
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
 			p := &fakeZcodeBrowserProvider{browsers: []ZcodeBrowser{{ID: "chrome-1", Generation: 7, Name: "Chrome"}}}

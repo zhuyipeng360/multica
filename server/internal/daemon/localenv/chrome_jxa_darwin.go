@@ -29,13 +29,20 @@ func listChromeTabsJXA(ctx context.Context, pid int) ([]ChromeTab, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/usr/bin/osascript", "-l", "JavaScript", "-e", chromeListJXA, strconv.Itoa(pid))
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	stdout := &chromeJXALimitedBuffer{max: chromeJXAMaxOutput}
+	stderr := &chromeJXALimitedBuffer{max: 4096}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		if stderr.overflow {
+			return nil, ErrChromeJXAUnavailable
+		}
 		return nil, chromeJXAError(stderr.String())
+	}
+	if stdout.overflow || stderr.overflow {
+		return nil, ErrChromeJXAUnavailable
 	}
 	return parseChromeJXATabs(stdout.Bytes())
 }
